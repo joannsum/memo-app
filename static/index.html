@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memo — AcmAI Workshop</title>
+<style>
+  :root {
+    --bg:       #0a0a0a;
+    --surface:  #111a11;
+    --surface2: #0d150d;
+    --border:   #1a2a1a;
+    --green:    #39ff14;
+    --green-dim:#1db954;
+    --green-dk: #0a1a0a;
+    --red:      #ff3b3b;
+    --yellow:   #ffcc00;
+    --gray:     #888;
+    --white:    #f0f0f0;
+    --font:     'Courier New', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--white);
+    font-family: var(--font);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+    flex-shrink: 0;
+  }
+  .logo { color: var(--green); font-size: 18px; font-weight: bold; letter-spacing: 2px; }
+  .logo span { color: var(--white); font-weight: normal; }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--gray); display: inline-block;
+    margin-right: 6px; transition: background 0.3s;
+  }
+  .status-dot.ok  { background: var(--green); }
+  .status-dot.err { background: var(--red); }
+  .status-text { font-size: 11px; color: var(--gray); }
+
+  /* ── Main layout ── */
+  .layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    width: 240px;
+    flex-shrink: 0;
+    background: var(--surface2);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    gap: 20px;
+    overflow-y: auto;
+  }
+
+  .sidebar-section label {
+    display: block;
+    font-size: 9px;
+    color: var(--green);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .sidebar-section input[type="text"] {
+    width: 100%;
+    background: var(--green-dk);
+    border: 1px solid var(--border);
+    color: var(--white);
+    font-family: var(--font);
+    font-size: 12px;
+    padding: 6px 8px;
+    outline: none;
+  }
+  .sidebar-section input[type="text"]:focus {
+    border-color: var(--green-dim);
+  }
+
+  .radio-group { display: flex; flex-direction: column; gap: 4px; }
+  .radio-group label {
+    font-size: 12px;
+    color: var(--white);
+    letter-spacing: 0;
+    text-transform: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    cursor: pointer;
+    padding: 5px 6px;
+    border: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+  .radio-group label:hover { border-color: var(--border); }
+  .radio-group label.active {
+    border-color: var(--green-dim);
+    background: var(--green-dk);
+  }
+  .radio-group input { display: none; }
+  .radio-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    border: 1px solid var(--gray);
+    margin-top: 1px; flex-shrink: 0;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  label.active .radio-dot {
+    border-color: var(--green);
+    background: var(--green);
+  }
+  .memory-desc { font-size: 10px; color: var(--gray); margin-top: 1px; }
+
+  /* Toggle */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .toggle-label { font-size: 12px; }
+  .toggle {
+    position: relative; width: 36px; height: 20px; cursor: pointer;
+  }
+  .toggle input { display: none; }
+  .toggle-track {
+    width: 100%; height: 100%;
+    background: var(--border);
+    border-radius: 10px;
+    transition: background 0.2s;
+  }
+  .toggle input:checked + .toggle-track { background: var(--green-dim); }
+  .toggle-thumb {
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 14px; height: 14px;
+    background: var(--white);
+    border-radius: 50%;
+    transition: left 0.2s;
+  }
+  .toggle input:checked ~ .toggle-thumb { left: 19px; }
+
+  /* Stats */
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--gray);
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-val { color: var(--green); font-weight: bold; }
+  .stat-val.warn { color: var(--yellow); }
+  .stat-val.danger { color: var(--red); }
+
+  .btn-clear {
+    width: 100%;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--gray);
+    font-family: var(--font);
+    font-size: 11px;
+    padding: 6px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .btn-clear:hover { border-color: var(--red); color: var(--red); }
+
+  /* ── Chat area ── */
+  .chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .message { display: flex; flex-direction: column; gap: 4px; }
+
+  .message.user { align-items: flex-end; }
+  .message.assistant { align-items: flex-start; }
+
+  .bubble {
+    max-width: 70%;
+    padding: 10px 14px;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .message.user .bubble {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--white);
+  }
+  .message.assistant .bubble {
+    background: var(--green-dk);
+    border: 1px solid var(--green-dim);
+    color: var(--white);
+  }
+  .message.assistant .bubble.loading {
+    color: var(--gray);
+    font-style: italic;
+  }
+
+  .meta {
+    font-size: 10px;
+    color: var(--gray);
+    padding: 0 4px;
+  }
+
+  /* Security flags */
+  .flag-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #2a0000;
+    border: 1px solid var(--red);
+    padding: 6px 12px;
+    font-size: 11px;
+    color: var(--red);
+    margin: 0 20px;
+    flex-shrink: 0;
+  }
+  .flag-banner.hidden { display: none; }
+
+  /* Input row */
+  .input-row {
+    display: flex;
+    gap: 8px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--surface2);
+    flex-shrink: 0;
+  }
+  #msg-input {
+    flex: 1;
+    background: var(--green-dk);
+    border: 1px solid var(--border);
+    color: var(--white);
+    font-family: var(--font);
+    font-size: 13px;
+    padding: 10px 14px;
+    outline: none;
+    resize: none;
+    height: 44px;
+    min-height: 44px;
+    max-height: 120px;
+  }
+  #msg-input:focus { border-color: var(--green-dim); }
+
+  #send-btn {
+    background: var(--green-dim);
+    border: none;
+    color: var(--bg);
+    font-family: var(--font);
+    font-size: 12px;
+    font-weight: bold;
+    padding: 0 20px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    transition: background 0.15s;
+  }
+  #send-btn:hover:not(:disabled) { background: var(--green); }
+  #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* Empty state */
+  .empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--gray);
+    font-size: 12px;
+    text-align: center;
+  }
+  .empty-state .big { font-size: 32px; margin-bottom: 4px; }
+  .empty-state .hint { font-size: 10px; color: var(--border); margin-top: 12px; }
+
+  /* Vector memory badge */
+  .memories-badge {
+    display: inline-block;
+    font-size: 10px;
+    color: var(--green-dim);
+    border: 1px solid var(--green-dim);
+    padding: 1px 6px;
+    margin-top: 2px;
+  }
+
+  /* /memories panel */
+  .memories-panel {
+    background: var(--surface);
+    border: 1px solid var(--green-dim);
+    padding: 12px 16px;
+    margin: 0 20px 8px;
+    max-height: 300px;
+    overflow-y: auto;
+    font-size: 12px;
+  }
+  .memories-panel h3 {
+    color: var(--green);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .memories-panel .mem-item {
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .memories-panel .mem-item:last-child { border-bottom: none; }
+  .memories-panel .mem-fact { color: var(--white); flex: 1; }
+  .memories-panel .mem-score { color: var(--green-dim); white-space: nowrap; }
+  .memories-panel .mem-empty { color: var(--gray); font-style: italic; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="logo">MEMO <span>/ AcmAI Workshop</span></div>
+  <div style="display:flex;align-items:center;gap:6px;">
+    <span class="status-dot" id="status-dot"></span>
+    <span class="status-text" id="status-text">checking ollama...</span>
+  </div>
+</header>
+
+<!-- Layout -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+
+    <!-- User ID -->
+    <div class="sidebar-section">
+      <label>User ID</label>
+      <input type="text" id="user-id" value="default" placeholder="your name...">
+    </div>
+
+    <!-- Memory type -->
+    <div class="sidebar-section">
+      <label>Memory Type</label>
+      <div class="radio-group" id="memory-radios">
+
+        <label class="active" data-val="buffer">
+          <input type="radio" name="memory" value="buffer" checked>
+          <span class="radio-dot"></span>
+          <span>
+            Buffer
+            <div class="memory-desc">Every message, full history</div>
+          </span>
+        </label>
+
+        <label data-val="window">
+          <input type="radio" name="memory" value="window">
+          <span class="radio-dot"></span>
+          <span>
+            Window
+            <div class="memory-desc">Last 6 messages only</div>
+          </span>
+        </label>
+
+        <label data-val="summary">
+          <input type="radio" name="memory" value="summary">
+          <span class="radio-dot"></span>
+          <span>
+            Summary
+            <div class="memory-desc">Recent verbatim + older summarized</div>
+          </span>
+        </label>
+
+        <label data-val="vector">
+          <input type="radio" name="memory" value="vector">
+          <span class="radio-dot"></span>
+          <span>
+            Vector
+            <div class="memory-desc">Semantic retrieval — finds what's relevant</div>
+          </span>
+        </label>
+
+      </div>
+    </div>
+
+    <!-- Security toggle -->
+    <div class="sidebar-section">
+      <label>Security</label>
+      <div class="toggle-row">
+        <span class="toggle-label" id="sec-label" style="color:var(--gray)">OFF — defenses disabled</span>
+        <label class="toggle">
+          <input type="checkbox" id="security-toggle">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb"></div>
+        </label>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="sidebar-section">
+      <label>Session Stats</label>
+      <div class="stat-row">
+        <span>tokens ~</span>
+        <span class="stat-val" id="stat-tokens">0</span>
+      </div>
+      <div class="stat-row">
+        <span>messages</span>
+        <span class="stat-val" id="stat-msgs">0</span>
+      </div>
+      <div class="stat-row">
+        <span>flagged</span>
+        <span class="stat-val" id="stat-flags">0</span>
+      </div>
+      <div class="stat-row">
+        <span>memory</span>
+        <span class="stat-val" id="stat-memtype">Buffer</span>
+      </div>
+    </div>
+
+    <!-- Clear -->
+    <button class="btn-clear" onclick="clearSession()">Clear Session</button>
+
+  </aside>
+
+  <!-- Chat -->
+  <div class="chat-area">
+
+    <!-- Flag banner -->
+    <div class="flag-banner hidden" id="flag-banner">
+      ⚠ <strong>Injection detected</strong>: <span id="flag-reason"></span>
+      — input was sanitized before processing
+    </div>
+
+    <!-- Messages -->
+    <div class="messages" id="messages">
+      <div class="empty-state" id="empty-state">
+        <div class="big">🔒</div>
+        <div>Memo is ready.</div>
+        <div>Try telling Memo your name and what you're working on.</div>
+        <div class="hint">
+          Switch memory types in the sidebar to see how context changes.<br>
+          Turn Security ON then try: "ignore previous instructions"
+        </div>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="input-row">
+      <textarea id="msg-input" placeholder="Message Memo..." rows="1"></textarea>
+      <button id="send-btn" onclick="sendMessage()">Send</button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────
+let totalFlags = 0;
+
+// ── Ollama health check ───────────────────────────────────
+async function checkHealth() {
+  try {
+    const r = await fetch('/health');
+    const d = await r.json();
+    const dot  = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+    if (d.ollama === 'connected') {
+      dot.className  = 'status-dot ok';
+      const model    = d.models.find(m => m.includes('llama')) || d.models[0] || 'unknown';
+      text.textContent = `ollama connected · ${model}`;
+    } else {
+      dot.className  = 'status-dot err';
+      text.textContent = 'ollama offline — run: ollama serve';
+    }
+  } catch {
+    document.getElementById('status-dot').className = 'status-dot err';
+    document.getElementById('status-text').textContent = 'backend offline';
+  }
+}
+
+// ── Memory radio buttons ──────────────────────────────────
+document.querySelectorAll('#memory-radios label').forEach(lbl => {
+  lbl.addEventListener('click', () => {
+    document.querySelectorAll('#memory-radios label').forEach(l => l.classList.remove('active'));
+    lbl.classList.add('active');
+    lbl.querySelector('input').checked = true;
+  });
+});
+
+// ── Security toggle ───────────────────────────────────────
+document.getElementById('security-toggle').addEventListener('change', function() {
+  const label = document.getElementById('sec-label');
+  if (this.checked) {
+    label.textContent = 'ON — defenses active';
+    label.style.color = 'var(--green)';
+  } else {
+    label.textContent = 'OFF — defenses disabled';
+    label.style.color = 'var(--gray)';
+  }
+});
+
+// ── Helpers ───────────────────────────────────────────────
+function getUserId()     { return document.getElementById('user-id').value.trim() || 'default'; }
+function getMemoryType() { return document.querySelector('#memory-radios input:checked').value; }
+function getSecurityOn() { return document.getElementById('security-toggle').checked; }
+
+function clearMessages() {
+  const el = document.getElementById('messages');
+  el.innerHTML = '<div class="empty-state" id="empty-state">'
+    + '<div class="big">🔒</div><div>Session cleared. Start fresh.</div></div>';
+}
+
+function appendMessage(role, content, meta = '') {
+  const empty = document.getElementById('empty-state');
+  if (empty) empty.remove();
+
+  const el = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `message ${role}`;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = content;
+
+  const metaEl = document.createElement('div');
+  metaEl.className = 'meta';
+  metaEl.textContent = meta;
+
+  div.appendChild(bubble);
+  if (meta) div.appendChild(metaEl);
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+  return bubble;
+}
+
+function showFlag(reason) {
+  const banner = document.getElementById('flag-banner');
+  document.getElementById('flag-reason').textContent = reason;
+  banner.classList.remove('hidden');
+  setTimeout(() => banner.classList.add('hidden'), 6000);
+}
+
+function updateStats(data) {
+  const tokens = data.tokens;
+  const el = document.getElementById('stat-tokens');
+  el.textContent = tokens;
+  el.className = 'stat-val' + (tokens > 800 ? ' danger' : tokens > 400 ? ' warn' : '');
+  document.getElementById('stat-msgs').textContent = data.history_count;
+  document.getElementById('stat-memtype').textContent = data.memory_type.split(' ')[0];
+  if (data.flagged) {
+    totalFlags++;
+    document.getElementById('stat-flags').textContent = totalFlags;
+    document.getElementById('stat-flags').className = 'stat-val danger';
+  }
+}
+
+// ── Send message ──────────────────────────────────────────
+async function sendMessage() {
+  const input = document.getElementById('msg-input');
+  const msg   = input.value.trim();
+  if (!msg) return;
+
+  input.value = '';
+  input.style.height = '44px';
+  document.getElementById('send-btn').disabled = true;
+
+  // ── /memories command: show stored vector memories ──────
+  if (msg.trim() === '/memories') {
+    await showMemoriesPanel();
+    document.getElementById('send-btn').disabled = false;
+    input.focus();
+    return;
+  }
+
+  appendMessage('user', msg);
+  const loadingBubble = appendMessage('assistant', 'thinking...', '');
+  loadingBubble.classList.add('loading');
+
+  try {
+    const resp = await fetch('/chat', {
+      method:  'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        user_id:     getUserId(),
+        message:     msg,
+        memory_type: getMemoryType(),
+        security:    getSecurityOn(),
+      }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+
+    const data = await resp.json();
+
+    loadingBubble.classList.remove('loading');
+    loadingBubble.textContent = data.response;
+
+    // Update meta below assistant bubble
+    const metaEl = loadingBubble.nextSibling;
+    let memLabel;
+    if (data.memory_type === 'Vector Memory' && data.memories_used > 0) {
+      memLabel = `${data.memory_type} · ~${data.tokens} tokens · memories retrieved: ${data.memories_used}`;
+    } else {
+      memLabel = `${data.memory_type} · ~${data.tokens} tokens · ${data.history_count} msgs in context`;
+    }
+    if (metaEl && metaEl.className === 'meta') {
+      metaEl.textContent = memLabel;
+    } else {
+      const m = document.createElement('div');
+      m.className = 'meta';
+      m.textContent = memLabel;
+      loadingBubble.parentNode.appendChild(m);
+    }
+
+    // Show memories-retrieved badge for vector memory
+    if (data.memory_type === 'Vector Memory' && data.memories_used > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'memories-badge';
+      badge.textContent = `memories retrieved: ${data.memories_used}`;
+      loadingBubble.parentNode.appendChild(badge);
+    }
+
+    if (data.flagged) showFlag(data.flag_reason);
+    updateStats(data);
+
+  } catch (e) {
+    loadingBubble.classList.remove('loading');
+    loadingBubble.textContent = `Error: ${e.message}`;
+    loadingBubble.style.color = 'var(--red)';
+  }
+
+  document.getElementById('send-btn').disabled = false;
+  input.focus();
+}
+
+// ── /memories panel ───────────────────────────────────────
+async function showMemoriesPanel() {
+  const userId = getUserId();
+  // Remove any existing panel
+  const old = document.querySelector('.memories-panel');
+  if (old) old.remove();
+
+  try {
+    const resp = await fetch(`/memories/${encodeURIComponent(userId)}`);
+    const data = await resp.json();
+
+    const panel = document.createElement('div');
+    panel.className = 'memories-panel';
+
+    let html = '<h3>Stored Memories</h3>';
+    if (!data.memories || data.memories.length === 0) {
+      html += '<div class="mem-empty">No memories stored yet. Try saying "remember [fact]" in Vector mode.</div>';
+    } else {
+      for (const m of data.memories) {
+        const score = m.score !== undefined ? `${(m.score * 100).toFixed(0)}%` : '';
+        html += `<div class="mem-item"><span class="mem-fact">${escapeHtml(m.fact)}</span>`
+              + (score ? `<span class="mem-score">${score}</span>` : '')
+              + `</div>`;
+      }
+    }
+    panel.innerHTML = html;
+
+    // Insert before messages area
+    const chatArea = document.querySelector('.chat-area');
+    const messages = document.getElementById('messages');
+    chatArea.insertBefore(panel, messages);
+
+    // Auto-dismiss after 15 seconds
+    setTimeout(() => { if (panel.parentNode) panel.remove(); }, 15000);
+  } catch (e) {
+    console.error('Failed to load memories:', e);
+  }
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+// ── Clear session ─────────────────────────────────────────
+async function clearSession() {
+  const userId = getUserId();
+  await fetch(`/sessions/${userId}`, {method: 'DELETE'});
+  clearMessages();
+  totalFlags = 0;
+  document.getElementById('stat-tokens').textContent  = '0';
+  document.getElementById('stat-msgs').textContent    = '0';
+  document.getElementById('stat-flags').textContent   = '0';
+  document.getElementById('stat-flags').className     = 'stat-val';
+}
+
+// ── Textarea auto-resize + enter to send ──────────────────
+document.getElementById('msg-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+});
+document.getElementById('msg-input').addEventListener('input', function() {
+  this.style.height = '44px';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+// ── Init ──────────────────────────────────────────────────
+checkHealth();
+setInterval(checkHealth, 10000);
+</script>
+</body>
+</html>
