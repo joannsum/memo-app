@@ -7,10 +7,11 @@ Then: open http://localhost:8000
 
 from __future__ import annotations
 import asyncio
+import json
 import httpx
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -64,8 +65,24 @@ def get_session(user_id: str, memory_type: str, security: bool) -> dict:
     return sessions[key]
 
 
-# API and routing 
+# Persistent HTTP client — reused across requests to avoid reconnect overhead.
+# Created at startup, closed on shutdown.
+http_client: httpx.AsyncClient | None = None
+
+# API and routing
 app = FastAPI(title="Memo — AcmAI Workshop")
+
+
+@app.on_event("startup")
+async def startup():
+    global http_client
+    http_client = httpx.AsyncClient(timeout=120)
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    if http_client:
+        await http_client.aclose()
 
 static_dir = Path("static")
 if static_dir.exists():
@@ -159,13 +176,12 @@ async def chat(req: ChatRequest):
             f"Memo:"
         )
 
-    # Call Ollama
+    # Call Ollama (non-streaming fallback for /chat)
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                OLLAMA_URL,
-                json={"model": MODEL, "prompt": full_prompt, "stream": False},
-            )
+        resp = await http_client.post(
+            OLLAMA_URL,
+            json={"model": MODEL, "prompt": full_prompt, "stream": False},
+        )
         data     = resp.json()
         response = data.get("response", "").strip()
     except httpx.ConnectError:
@@ -198,6 +214,108 @@ async def chat(req: ChatRequest):
         history_count = len(mem.messages),
         memories_used = memories_used,
     )
+
+
+@app.post("/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """
+    Streaming version of /chat — sends tokens as Server-Sent Events (SSE).
+    Each token arrives as: data: {"token": "word"}\n\n
+    Final event:           data: {"done": true, ...metadata}\n\n
+    """
+    if not req.message.strip():
+        raise HTTPException(400, "Message cannot be empty")
+
+    sess = get_session(req.user_id, req.memory_type, req.security)
+    mem  = sess["memory"]
+
+    memories_used = 0
+    flagged       = False
+    flag_reason   = ""
+
+    # Handle "remember" commands (vector mode) — not streamed, instant reply
+    if isinstance(mem, VectorMemory) and VectorMemory.is_remember_command(req.message):
+        fact = VectorMemory.extract_remember_fact(req.message)
+        if fact:
+            await mem.store_fact(fact, source_session=str(sess["vault"]))
+            confirm = f"Got it — I'll remember that {fact}."
+            mem.add("user", req.message)
+            mem.add("assistant", confirm)
+            append_message(sess["vault"], "user", req.message)
+            append_message(sess["vault"], "assistant", confirm)
+
+            async def remember_stream():
+                yield f"data: {json.dumps({'token': confirm})}\n\n"
+                yield f"data: {json.dumps({'done': True, 'response': confirm, 'tokens': mem.token_estimate(), 'memory_type': mem.name, 'security_on': req.security, 'flagged': False, 'flag_reason': '', 'history_count': len(mem.messages), 'memories_used': 1})}\n\n"
+
+            return StreamingResponse(remember_stream(), media_type="text/event-stream")
+
+    # Security
+    if req.security:
+        flagged, flag_reason = detect_injection(req.message)
+        user_input = sanitize(req.message)
+    else:
+        user_input = req.message
+
+    # Vector retrieval
+    if isinstance(mem, VectorMemory):
+        await mem.retrieve(user_input)
+        memories_used = len(mem.retrieved)
+
+    # Build prompt
+    history = mem.build_history()
+    if req.security:
+        full_prompt = build_safe_prompt(SYSTEM_PROMPT, history, user_input)
+    else:
+        full_prompt = (
+            f"{SYSTEM_PROMPT}\n\n"
+            f"Conversation:\n{history}\n\n"
+            f"Human: {user_input}\n"
+            f"Memo:"
+        )
+
+    async def token_generator():
+        """Stream tokens from Ollama, then send a final metadata event."""
+        full_response = []
+        try:
+            async with http_client.stream(
+                "POST",
+                OLLAMA_URL,
+                json={"model": MODEL, "prompt": full_prompt, "stream": True},
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+                    token = chunk.get("response", "")
+                    if token:
+                        full_response.append(token)
+                        yield f"data: {json.dumps({'token': token})}\n\n"
+        except httpx.ConnectError:
+            yield f"data: {json.dumps({'error': 'Cannot connect to Ollama. Is it running?'})}\n\n"
+            return
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            return
+
+        response = "".join(full_response).strip()
+
+        # Update memory + vault
+        mem.add("user", user_input)
+        mem.add("assistant", response)
+        append_message(sess["vault"], "user", req.message)
+        append_message(sess["vault"], "assistant", response)
+
+        # Background fact extraction (vector mode)
+        if isinstance(mem, VectorMemory):
+            asyncio.create_task(
+                mem.extract_and_store(user_input, response, source_session=str(sess["vault"]))
+            )
+
+        # Final metadata event
+        yield f"data: {json.dumps({'done': True, 'response': response, 'tokens': mem.token_estimate(), 'memory_type': mem.name, 'security_on': req.security, 'flagged': flagged, 'flag_reason': flag_reason, 'history_count': len(mem.messages), 'memories_used': memories_used})}\n\n"
+
+    return StreamingResponse(token_generator(), media_type="text/event-stream")
 
 
 @app.get("/memories/{user_id}")
@@ -241,8 +359,7 @@ async def clear_session(user_id: str):
 @app.get("/health")
 async def health():
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get("http://localhost:11434/api/tags")
+        r = await http_client.get("http://localhost:11434/api/tags", timeout=5)
         models = [m["name"] for m in r.json().get("models", [])]
         return {"ollama": "connected", "models": models}
     except Exception:

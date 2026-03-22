@@ -608,11 +608,13 @@ async function sendMessage() {
   }
 
   appendMessage('user', msg);
-  const loadingBubble = appendMessage('assistant', 'thinking...', '');
+  const loadingBubble = appendMessage('assistant', '', '');
   loadingBubble.classList.add('loading');
+  loadingBubble.textContent = '';
 
   try {
-    const resp = await fetch('/chat', {
+    // Use the streaming endpoint — tokens arrive one at a time via SSE
+    const resp = await fetch('/chat/stream', {
       method:  'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -624,42 +626,73 @@ async function sendMessage() {
     });
 
     if (!resp.ok) {
-      const err = await resp.json();
+      const err = await resp.json().catch(() => ({}));
       throw new Error(err.detail || `HTTP ${resp.status}`);
     }
 
-    const data = await resp.json();
+    // Read SSE stream — each line is "data: {...}\n\n"
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let started = false;
 
-    loadingBubble.classList.remove('loading');
-    loadingBubble.textContent = data.response;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    // Update meta below assistant bubble
-    const metaEl = loadingBubble.nextSibling;
-    let memLabel;
-    if (data.memory_type === 'Vector Memory' && data.memories_used > 0) {
-      memLabel = `${data.memory_type} · ~${data.tokens} tokens · memories retrieved: ${data.memories_used}`;
-    } else {
-      memLabel = `${data.memory_type} · ~${data.tokens} tokens · ${data.history_count} msgs in context`;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();  // keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = JSON.parse(line.slice(6));
+
+        if (payload.error) {
+          throw new Error(payload.error);
+        }
+
+        if (payload.token) {
+          // First token — clear the loading state
+          if (!started) {
+            loadingBubble.classList.remove('loading');
+            started = true;
+          }
+          loadingBubble.textContent += payload.token;
+          // Auto-scroll as tokens arrive
+          const el = document.getElementById('messages');
+          el.scrollTop = el.scrollHeight;
+        }
+
+        if (payload.done) {
+          // Final event with metadata
+          const data = payload;
+          loadingBubble.classList.remove('loading');
+
+          let memLabel;
+          if (data.memory_type === 'Vector Memory' && data.memories_used > 0) {
+            memLabel = `${data.memory_type} · ~${data.tokens} tokens · memories retrieved: ${data.memories_used}`;
+          } else {
+            memLabel = `${data.memory_type} · ~${data.tokens} tokens · ${data.history_count} msgs in context`;
+          }
+          const m = document.createElement('div');
+          m.className = 'meta';
+          m.textContent = memLabel;
+          loadingBubble.parentNode.appendChild(m);
+
+          // Show memories-retrieved badge for vector memory
+          if (data.memory_type === 'Vector Memory' && data.memories_used > 0) {
+            const badge = document.createElement('span');
+            badge.className = 'memories-badge';
+            badge.textContent = `memories retrieved: ${data.memories_used}`;
+            loadingBubble.parentNode.appendChild(badge);
+          }
+
+          if (data.flagged) showFlag(data.flag_reason);
+          updateStats(data);
+        }
+      }
     }
-    if (metaEl && metaEl.className === 'meta') {
-      metaEl.textContent = memLabel;
-    } else {
-      const m = document.createElement('div');
-      m.className = 'meta';
-      m.textContent = memLabel;
-      loadingBubble.parentNode.appendChild(m);
-    }
-
-    // Show memories-retrieved badge for vector memory
-    if (data.memory_type === 'Vector Memory' && data.memories_used > 0) {
-      const badge = document.createElement('span');
-      badge.className = 'memories-badge';
-      badge.textContent = `memories retrieved: ${data.memories_used}`;
-      loadingBubble.parentNode.appendChild(badge);
-    }
-
-    if (data.flagged) showFlag(data.flag_reason);
-    updateStats(data);
 
   } catch (e) {
     loadingBubble.classList.remove('loading');
