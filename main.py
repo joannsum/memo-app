@@ -20,8 +20,9 @@ from vector_memory  import VectorMemory
 from security       import detect_injection, sanitize, build_safe_prompt
 from vault          import session_path, write_header, append_message, load_past_sessions, list_sessions
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL      = "llama3.2"
+OLLAMA_URL   = "http://localhost:11434/api/generate"
+MODEL        = "llama3.2"
+MAX_TOKENS   = 150  # cap response length for snappy demos
 
 SYSTEM_PROMPT = (
     "You are Memo, a warm and helpful personal assistant with persistent memory. "
@@ -36,23 +37,25 @@ SYSTEM_PROMPT = (
 sessions: dict[str, dict] = {}  # user_id -> {memory, vault_path, security_on}
 
 
-def get_session(user_id: str, memory_type: str, security: bool) -> dict:
+async def get_session(user_id: str, memory_type: str, security: bool) -> dict:
     key = f"{user_id}:{memory_type}:{security}"
     if key not in sessions:
-        past = load_past_sessions(user_id)
-
         if memory_type == "buffer":
             mem = BufferMemory()
         elif memory_type == "window":
-            mem = WindowMemory(k=6)
+            mem = WindowMemory(k=3)
         elif memory_type == "vector":
             mem = VectorMemory(user_id=user_id)
         else:
             mem = SummaryMemory(max_tokens=400)
 
-        # Seed with past context
-        if past:
-            mem.add("assistant", f"[Past sessions loaded]\n{past[:1500]}")
+        # Only Vector mode ingests past sessions — it stores them as
+        # embeddings in ChromaDB so retrieval is semantic, not raw dump.
+        # The other modes start fresh to avoid hallucination from raw text.
+        if memory_type == "vector":
+            past = load_past_sessions(user_id)
+            if past:
+                await mem.ingest_past_sessions(past)
 
         vpath = session_path(user_id)
         write_header(vpath, user_id)
@@ -120,14 +123,14 @@ async def chat(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(400, "Message cannot be empty")
 
-    sess = get_session(req.user_id, req.memory_type, req.security)
+    sess = await get_session(req.user_id, req.memory_type, req.security)
     mem  = sess["memory"]
 
     flagged     = False
     flag_reason = ""
     memories_used = 0
 
-    # ── Handle explicit "remember" commands in vector mode ──────
+    # Handle explicit "remember" commands in vector mode
     if isinstance(mem, VectorMemory) and VectorMemory.is_remember_command(req.message):
         fact = VectorMemory.extract_remember_fact(req.message)
         if fact:
@@ -158,7 +161,7 @@ async def chat(req: ChatRequest):
     else:
         user_input = req.message  # no sanitization when security is off (teaching moment)
 
-    # ── Vector retrieval: find relevant memories before building prompt ──
+    # Vector retrieval: find relevant memories before building prompt
     if isinstance(mem, VectorMemory):
         await mem.retrieve(user_input)
         memories_used = len(mem.retrieved)
@@ -180,7 +183,7 @@ async def chat(req: ChatRequest):
     try:
         resp = await http_client.post(
             OLLAMA_URL,
-            json={"model": MODEL, "prompt": full_prompt, "stream": False},
+            json={"model": MODEL, "prompt": full_prompt, "stream": False, "options": {"num_predict": MAX_TOKENS}},
         )
         data     = resp.json()
         response = data.get("response", "").strip()
@@ -197,7 +200,7 @@ async def chat(req: ChatRequest):
     append_message(sess["vault"], "user",      req.message)   # save original (not sanitized) for transcript
     append_message(sess["vault"], "assistant", response)
 
-    # ── Background fact extraction (vector mode only) ──────────
+    # Background fact extraction (vector mode only)
     # Runs after the response is built so it doesn't slow down the chat.
     if isinstance(mem, VectorMemory):
         asyncio.create_task(
@@ -226,7 +229,7 @@ async def chat_stream(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(400, "Message cannot be empty")
 
-    sess = get_session(req.user_id, req.memory_type, req.security)
+    sess = await get_session(req.user_id, req.memory_type, req.security)
     mem  = sess["memory"]
 
     memories_used = 0
@@ -281,7 +284,7 @@ async def chat_stream(req: ChatRequest):
             async with http_client.stream(
                 "POST",
                 OLLAMA_URL,
-                json={"model": MODEL, "prompt": full_prompt, "stream": True},
+                json={"model": MODEL, "prompt": full_prompt, "stream": True, "options": {"num_predict": MAX_TOKENS}},
             ) as resp:
                 async for line in resp.aiter_lines():
                     if not line:

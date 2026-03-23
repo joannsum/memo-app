@@ -32,7 +32,7 @@ from vault import write_entity_file
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL      = "llama3.2"
 
-# ── Patterns that trigger explicit "remember" storage ──────
+# Patterns that trigger explicit "remember" storage
 REMEMBER_PATTERNS = [
     re.compile(r"^remember\b", re.IGNORECASE),
     re.compile(r"^memo\s+remember\b", re.IGNORECASE),
@@ -79,7 +79,7 @@ class VectorMemory:
         # Retrieved memories from the most recent query (shown in response)
         self.retrieved: list[dict] = []  # [{fact, score}]
 
-    # ── Interface methods (same as Buffer/Window/Summary) ──────
+    # Interface methods (same as Buffer/Window/Summary)
 
     def add(self, role: str, content: str):
         """Add a message to the rolling window (not to ChromaDB — that's separate)."""
@@ -114,7 +114,49 @@ class VectorMemory:
     def token_estimate(self) -> int:
         return len(self.build_history()) // 4
 
-    # ── Vector operations ──────────────────────────────────────
+    # Vector operations
+    async def ingest_past_sessions(self, past_text: str):
+        """
+        Index past vault session transcripts into ChromaDB.
+        Uses the LLM to extract facts (same as background extraction)
+        rather than storing raw text — this prevents hallucination.
+        Only runs once per session init; skips if the collection already has data.
+        """
+        if self._collection.count() > 0:
+            return  # already has memories, don't re-ingest
+
+        # Ask the LLM to pull out concrete facts from the transcript
+        prompt = (
+            "Extract 5 to 10 specific, memorable facts from these past conversations.\n"
+            "Facts should be things like: the user's name, preferences, projects, goals, "
+            "decisions, or important details worth remembering.\n"
+            "Return ONLY a JSON array of strings. If nothing is worth remembering, "
+            'return an empty array [].\n\n'
+            f"{past_text[:2000]}\n\n"
+            "Facts (JSON array):"
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(
+                    OLLAMA_URL,
+                    json={"model": MODEL, "prompt": prompt, "stream": False},
+                )
+            raw = resp.json().get("response", "").strip()
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+
+            match = re.search(r"\[.*\]", raw, re.DOTALL)
+            if not match:
+                return
+
+            import json
+            facts = json.loads(match.group())
+            for fact in facts[:10]:
+                if isinstance(fact, str) and len(fact.strip()) > 5:
+                    await self.store_fact(fact.strip(), source_session="past-sessions")
+        except Exception:
+            pass  # best-effort — don't block session creation
 
     async def retrieve(self, query: str, n_results: int = 5):
         """
@@ -263,8 +305,6 @@ class VectorMemory:
                     "date": meta.get("date", ""),
                 })
         return scored
-
-    # ── Explicit remember detection ────────────────────────────
 
     @staticmethod
     def is_remember_command(text: str) -> bool:
