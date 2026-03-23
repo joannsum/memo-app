@@ -43,6 +43,15 @@ INJECTION_PATTERNS = [
     (r"<\s*/?\s*system\s*>",  "delimiter injection"),
     (r"\[INST\]",              "delimiter injection"),
     (r"###\s*(system|instruction)", "delimiter injection"),
+
+    # Data exfiltration — asking the model to reveal sensitive user info
+    (r"(what|tell|give|show|reveal|share|list)\s+(me\s+)?(the\s+)?(user'?s?\s+)?(name|password|email|phone|address|ssn|social\s+security)", "sensitive data request"),
+    (r"(what|tell|give|show|reveal|share)\s+(me\s+)?(the\s+)?(access|auth|api|secret|private)\s*(code|key|token|number)", "sensitive data request"),
+    (r"(what|tell|give|show|reveal|share)\s+(me\s+)?(other|another)\s+(user|person|people)'?s?\s+(info|data|detail|name|message)", "user data exfiltration attempt"),
+    (r"(who\s+(else|other)|other\s+user|another\s+user)\s+(is|are|has|was|said|wrote|asked)", "user data exfiltration attempt"),
+    (r"(password|passwd|passcode|pin\s*(code|number)?)\b", "password/credential reference"),
+    (r"\b(ssn|social\s+security|credit\s+card|card\s+number|cvv|routing\s+number|bank\s+account)\b", "sensitive financial data reference"),
+    (r"(access|auth(orization)?|secret|private|api)\s*(code|key|token|number)\b", "credential/key reference"),
 ]
 
 # ── Characters/patterns to sanitize ──────────────────────
