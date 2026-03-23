@@ -669,6 +669,12 @@ async function sendMessage() {
           const data = payload;
           loadingBubble.classList.remove('loading');
 
+          // If security redacted the output, replace the streamed text
+          if (data.redacted) {
+            loadingBubble.textContent = data.response;
+            loadingBubble.style.borderColor = 'var(--red)';
+          }
+
           let memLabel;
           if (data.memory_type === 'Vector Memory' && data.memories_used > 0) {
             memLabel = `${data.memory_type} · ~${data.tokens} tokens · memories retrieved: ${data.memories_used}`;
